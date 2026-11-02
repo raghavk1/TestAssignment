@@ -1,0 +1,11 @@
+limit.maxFrequencyPerSecond:
+  - value: 100000
+    constraints: {}
+
+limit.maxBurstRatioPerSecond:
+  - value: 2
+    constraints: {}
+
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}
