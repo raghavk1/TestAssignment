@@ -19,14 +19,25 @@ export function getRedisClient(): Redis {
       host: config.redis.host,
       port: config.redis.port,
       password: config.redis.password,
-      retryStrategy: (times) => Math.min(times * 50, 2000),
-      maxRetriesPerRequest: 2,
+      // Stop retrying after 5 attempts (~2s total). Without this the client
+      // floods the console with ECONNREFUSED every 2 s when Redis isn't running.
+      retryStrategy: (times) => {
+        if (times > 5) {
+          logger.warn('Redis unavailable — retries exhausted, operating without cache');
+          return null; // stop retrying
+        }
+        return Math.min(times * 200, 1000);
+      },
+      maxRetriesPerRequest: 1,
       lazyConnect: true,
+      enableOfflineQueue: false,
     });
 
     redisClient.on('connect', () => logger.info('Redis connected'));
-    redisClient.on('error', (err) => logger.error('Redis error', { err: err.message }));
-    redisClient.on('close', () => logger.warn('Redis connection closed'));
+    // Log only the very first error; all subsequent retry errors are swallowed
+    // via the catch-all listener so ioredis never emits 'Unhandled error event'.
+    redisClient.once('error', (err) => logger.warn(`Redis not available: ${err.message}`));
+    redisClient.on('error', () => { /* swallow retry errors silently */ });
   }
   return redisClient;
 }
