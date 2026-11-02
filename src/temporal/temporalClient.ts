@@ -54,16 +54,29 @@ export async function runHotelOfferWorkflow(city: string): Promise<WorkflowResul
 }
 
 /**
- * Checks Temporal connectivity by attempting a connection.
+ * Checks Temporal connectivity with a hard 3 s deadline.
+ * Uses a fresh one-shot connection rather than the singleton so a failed
+ * attempt doesn't poison the cached client used by runHotelOfferWorkflow.
  */
 export async function pingTemporal(): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
-  try {
+  const probePromise = (async () => {
     const start = Date.now();
-    await getTemporalClient();
-    return { ok: true, latencyMs: Date.now() - start };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
+    let conn: Connection | null = null;
+    try {
+      conn = await Connection.connect({ address: config.temporal.address });
+      await conn.close();
+      return { ok: true as const, latencyMs: Date.now() - start };
+    } catch (err) {
+      if (conn) await conn.close().catch(() => { /* ignore */ });
+      return { ok: false as const, error: (err as Error).message };
+    }
+  })();
+
+  const deadline = new Promise<{ ok: false; error: string }>((res) =>
+    setTimeout(() => res({ ok: false, error: 'Temporal ping timeout' }), 3000)
+  );
+
+  return Promise.race([probePromise, deadline]);
 }
 
 export async function closeTemporal(): Promise<void> {

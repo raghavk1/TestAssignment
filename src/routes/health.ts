@@ -22,22 +22,14 @@ const START_TIME = Date.now();
 healthRouter.get('/health', async (_req: Request, res: Response) => {
   logger.debug('Health check requested');
 
-  // ── Check Redis ───────────────────────────────────────────────────────────
-  const redisResult = await pingRedis().catch((e) => ({
-    ok: false,
-    error: (e as Error).message,
-  }));
-
-  // ── Check Temporal ────────────────────────────────────────────────────────
-  const temporalResult = await pingTemporal().catch((e) => ({
-    ok: false,
-    error: (e as Error).message,
-  }));
-
-  // ── Check Suppliers ───────────────────────────────────────────────────────
-  const supplierChecks = await Promise.allSettled([
-    checkSupplier('Supplier A', `${config.suppliers.a.url}/supplierA/hotels`, 'paris'),
-    checkSupplier('Supplier B', `${config.suppliers.b.url}/supplierB/hotels`, 'paris'),
+  // ── Run all checks concurrently ───────────────────────────────────────────
+  const [redisResult, temporalResult, supplierChecks] = await Promise.all([
+    pingRedis().catch((e) => ({ ok: false as const, error: (e as Error).message })),
+    pingTemporal().catch((e) => ({ ok: false as const, error: (e as Error).message })),
+    Promise.allSettled([
+      checkSupplier('Supplier A', `${config.suppliers.a.url}/supplierA/hotels`, 'paris'),
+      checkSupplier('Supplier B', `${config.suppliers.b.url}/supplierB/hotels`, 'paris'),
+    ]),
   ]);
 
   const suppliers: SupplierHealth[] = supplierChecks.map((r) => {

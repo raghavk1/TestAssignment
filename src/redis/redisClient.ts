@@ -125,16 +125,48 @@ export async function getAllCachedHotels(
 
 /**
  * Pings Redis to check latency.
+ * Uses a one-shot probe client with zero retries and a hard 2.5 s
+ * deadline via Promise.race so the health check always resolves fast.
+ * The error listener prevents Node from crashing on ECONNREFUSED.
  */
 export async function pingRedis(): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
-  try {
-    const start = Date.now();
-    const redis = getRedisClient();
-    await redis.ping();
-    return { ok: true, latencyMs: Date.now() - start };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
+  const probePromise = new Promise<{ ok: boolean; latencyMs?: number; error?: string }>(
+    (resolve) => {
+      const probe = new Redis({
+        host: config.redis.host,
+        port: config.redis.port,
+        password: config.redis.password,
+        connectTimeout: 2000,
+        maxRetriesPerRequest: 0,
+        retryStrategy: () => null,
+        lazyConnect: true,
+        enableOfflineQueue: false,
+      });
+      // Must attach error listener or Node will throw an unhandled error event
+      probe.on('error', () => { /* handled in the catch below */ });
+
+      const start = Date.now();
+      probe
+        .connect()
+        .then(() => probe.ping())
+        .then(() => {
+          const latencyMs = Date.now() - start;
+          probe.quit().catch(() => { /* ignore */ });
+          resolve({ ok: true, latencyMs });
+        })
+        .catch((err: Error) => {
+          probe.disconnect();
+          resolve({ ok: false, error: err.message });
+        });
+    }
+  );
+
+  // Hard ceiling so the health route is never blocked longer than 2.5 s
+  const deadline = new Promise<{ ok: boolean; error: string }>((res) =>
+    setTimeout(() => res({ ok: false, error: 'Ping timeout' }), 2500)
+  );
+
+  return Promise.race([probePromise, deadline]);
 }
 
 export async function closeRedis(): Promise<void> {
